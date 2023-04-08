@@ -1,6 +1,6 @@
 //Tuan Vo
 //CPSC 4510
-//HW_1
+//HW_1 -> server
 
 #include <iostream>
 #include <stdio.h>
@@ -16,122 +16,135 @@
 #include <sys/wait.h>
 #include <signal.h>
 
-#define PORT "1234"  // the port users will be connecting to
-#define BACKLOG 10   // how many pending connections queue will hold
-
 using namespace std;
 
-void sigchld_handler(int s)
+#define MAXBUFF 1024
+
+// alocate the port using student id
+int allocate_port(const string &student_id = "4154412")
 {
-    int saved_errno = errno;
-    while(waitpid(-1, NULL, WNOHANG) > 0);
-    errno = saved_errno;
+    size_t hash_value = stoul(student_id);
+    int port_number = static_cast<int>(hash_value % 100);
+    port_number += 10401;
+    return port_number;
 }
 
-void *get_in_addr(struct sockaddr *sa)
+int main(int argc, char *argv[])
 {
-    if (sa->sa_family == AF_INET) {
-        return &(((struct sockaddr_in*)sa)->sin_addr);
-    }
-
-    return &(((struct sockaddr_in6*)sa)->sin6_addr);
-}
-
-int main()
-{
-    int sockfd, new_fd;
-
-    struct addrinfo hints, *servinfo, *p;
-    struct sockaddr_storage their_addr; // connector's address
-    struct sigaction sa;
-
-    socklen_t sin_size;
-    char s[INET6_ADDRSTRLEN];
-    int rv;
-
-    int yes = 1;
-
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE; //use my IP
-
-    if ((rv = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0) {
-        cerr << "getaddrinfo: " << gai_strerror(rv) << endl;
-        return 1;
-    }
-
-        for(p = servinfo; p != NULL; p = p->ai_next) {
-        if ((sockfd = socket(p->ai_family, p->ai_socktype,
-                p->ai_protocol)) == -1) {
-            perror("server: socket");
-            continue;
-        }
-
-        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
-            perror("setsockopt");
-            exit(1);
-        }
-
-        if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-            close(sockfd);
-            perror("server: bind");
-            continue;
-        }
-
-        break;
-    }
-
-    freeaddrinfo(servinfo);
-
-    if (p == NULL)
+    int port;
+    // if there any other arugment specified in command line
+    // the port will assign based on the result of allocate_port();
+    if (argc == 1)
+        port = allocate_port();
+    else if (argc == 2)
+        port = atoi(argv[1]);
+    else
     {
-        cerr << "server: failed to bind" << endl;
+        cerr << "Usage: ./server -OR- ./server port" << endl;
         exit(1);
     }
 
-    if (listen(sockfd, BACKLOG) == -1)
+    // create socket
+    int server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket == 0)
     {
-        perror("listen");
+        perror("socket failed");
         exit(1);
     }
 
-    sa.sa_handler = sigchld_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
-    if (sigaction(SIGCHLD, &sa, NULL) == -1)
+    // define server address
+    struct sockaddr_in server_address;
+    memset(&server_address, 0, sizeof(server_address));
+
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(port);
+    server_address.sin_addr.s_addr = INADDR_ANY;
+
+    // check if bind works
+    if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
     {
-        perror("sigaction");
+        perror("Bind failed");
         exit(1);
     }
 
-    cout << "server: beep beep ... waiting to connections..." << endl;
-
-    while(1)
+    // Allow up to 10 incoming requests and also check if listen works
+    if (listen(server_socket, 20) < 0)
     {
-        sin_size = sizeof(their_addr);
-        new_fd = accept(sockfd, (struct sockaddr*) &their_addr, &sin_size);
+        perror("Listen failed");
+        exit(1);
+    }
+    cout << "Server listening on port: " << port << endl;
 
-        if (new_fd == -1)
+    while (true)
+    {
+        struct sockaddr_in client_address;
+        socklen_t client_address_len = sizeof(client_address);
+        int client_socket = accept(server_socket, (struct sockaddr *)&client_address, &client_address_len);
+        if (client_socket < 0)
         {
-            perror("accept");
+            cerr << "FAILED to accept client connection" << endl;
             continue;
         }
 
-        inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr*) &their_addr), s, sizeof(s));
+        // return ip-adrees of the client who connect to server
+        char s[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(client_address.sin_addr), s, INET_ADDRSTRLEN);
         cout << "server got connection from " << s << endl;
 
-        if (!fork())
+        // Fork processing
+        pid_t pid = fork();
+        if (pid == -1)
         {
-            close(sockfd);
-            if (send(new_fd, "Hello, World**", 13, 0) == -1)
-                perror("send");
-            close(new_fd);
-            exit(0);
+            cerr << "Failed to process fork()" << endl;
+            continue;
         }
+        else if (pid == 0)
+        {
+            char buffer[MAXBUFF*2];
+            int recieve = recv(client_socket, buffer, MAXBUFF, 0);
+            if (recieve == -1)
+            {
+                perror("recv failed");
+                close(client_socket);
+                continue;
+            }
+            
+            //Report the command recived from client
+            buffer[recieve] = '\0';
+            cout << "Buffer received: " << buffer << endl;
 
-        close(new_fd);
+            //check if the command is exactly whois
+            string message = string(buffer, recieve);
+            string first_word;
+            size_t space = message.find(' ');
+            if (space != string::npos)
+                first_word = message.substr(0, space);
+
+            if (first_word != "whois")
+            {
+                cerr << "Internal Error: the command is not supported. Please use whois command!" << endl;
+                exit(1);
+            }
+
+            // Direct output to the socket
+            if (dup2(client_socket, STDOUT_FILENO) == -1 || dup2(client_socket, STDERR_FILENO) == -1)
+            {
+                perror("dup2 failed");
+                close(client_socket);
+                continue;
+            }
+
+            // Execute command
+            if (execl("/bin/sh", "sh", "-c", buffer, (char *)NULL) < 0)
+            {
+                perror("execl failed");
+                close(client_socket);
+                continue;
+            }
+        }
+        else
+            close(client_socket);
     }
-
+    close(server_socket);
     return 0;
 }

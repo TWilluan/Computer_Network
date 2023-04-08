@@ -1,91 +1,88 @@
-//Tuan Vo
-//CPSC 4510
-//HW_1
+// Tuan Vo
+// CPSC 4510
+// HW_1 -> client
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
 #include <string.h>
+#include <iostream>
+#include <string>
+#include <vector>
+#include <sstream>
+
+#include <unistd.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/types.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
 
-#include <arpa/inet.h>
+#define MAXBUFF 1024
 
-#define PORT "1234"
-#define MAXDATASIZE = 100
+using namespace std;
 
-void *get_in_addr(struct sockaddr* sa)
+int main(int argc, char **argv)
 {
-    if (sa->sa_family == AF_INET)
-        return &(((struct sockaddr_in*)sa)->sin_addr);
-
-    return &(((struct sockaddr_in6*)sa)->sin6_addr);
-}
-
-int main(int argc, char* argv[])
-{
-    int sockfd, numbytes;  
-    char buf[100];
-    struct addrinfo hints, *servinfo, *p;
-    int rv;
-    char s[INET6_ADDRSTRLEN];
-
-    if (argc != 2) {
-        fprintf(stderr,"usage: client hostname\n");
+    if (argc < 4)
+    {
+        cerr << "Usage: whoisclient hostname:server whois [option] arugment-list" << endl;
         exit(1);
     }
 
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-
-    if ((rv = getaddrinfo(argv[1], PORT, &hints, &servinfo)) != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-        return 1;
-    }
-
-    // loop through all the results and connect to the first we can
-    for(p = servinfo; p != NULL; p = p->ai_next) {
-        if ((sockfd = socket(p->ai_family, p->ai_socktype,
-                p->ai_protocol)) == -1) {
-            perror("client: socket");
-            continue;
-        }
-
-        if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-            close(sockfd);
-            perror("client: connect");
-            continue;
-        }
-
-        break;
-    }
-
-    if (p == NULL) {
-        fprintf(stderr, "client: failed to connect\n");
-        return 2;
-    }
-
-    inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr),
-            s, sizeof s);
-    printf("client: connecting to %s\n", s);
-
-    freeaddrinfo(servinfo); // all done with this structure
-
-    if ((numbytes = recv(sockfd, buf, 100-1, 0)) == -1) {
-        perror("recv");
+    //create socket
+    int client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_socket == 0)
+    {
+        perror("socket client failed");
         exit(1);
     }
 
+    char buffer[MAXBUFF];
+    struct sockaddr_in server_address;
 
-    buf[numbytes] = '\0';
+    // parse hostname:server and store in vector
+    stringstream ss(argv[1]);
+    vector<string> hostname_server;
+    string attr;
+    while (getline(ss, attr, ':'))
+        hostname_server.push_back(attr);
 
-    printf("client: received '%s'\n",buf);
+    // Define server address and connect to server
+    memset(&server_address, 0, sizeof(server_address));
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(stoi(hostname_server[1]));
+    inet_pton(AF_INET, hostname_server[1].c_str(), &server_address.sin_addr);
 
-    close(sockfd);
+    // Parse command line to get whois command
+    stringstream temp;
+    temp << argv[2];
+    for (int i = 3; i < argc; i++)
+        temp << " " << argv[i];
+    string whois = temp.str();
 
+    // check if client is able to connect to server
+    if (connect(client_socket, (struct sockaddr *)&server_address, sizeof(server_address)) == -1)
+    {
+        cerr << "Client Connect failed" << endl;
+        exit(1);
+    }
+
+    // Send package to Server
+    snprintf(buffer, MAXBUFF, "%s", whois.c_str());
+    send(client_socket, buffer, strlen(buffer), 0);
+
+    // Read message from Server
+    while (true)
+    {
+        int recieve = recv(client_socket, buffer, MAXBUFF, 0);
+        if (recieve <= 0)
+        {
+            cout << "Server disconnected - Thank you for using out network" << endl;
+            break;
+        }
+        buffer[recieve] = '\0';
+        cout << buffer << endl;
+    }
+
+    close(client_socket);
     return 0;
 }
